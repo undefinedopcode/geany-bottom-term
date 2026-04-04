@@ -330,6 +330,7 @@ bt_load_settings(BottomTermPlugin *bt)
     bt_apply_scheme_from_preset(bt, def);
     bt->font = g_strdup(BT_DEFAULT_FONT);
     bt->scheme_name = g_strdup(def->name);
+    bt->paned_pos = -1;
 
     GKeyFile *kf = g_key_file_new();
     if (!g_key_file_load_from_file(kf, bt->config_file, G_KEY_FILE_NONE, NULL)) {
@@ -342,6 +343,11 @@ bt_load_settings(BottomTermPlugin *bt)
 
     gchar *scheme = g_key_file_get_string(kf, BT_CONFIG_GROUP, "scheme", NULL);
     if (scheme) { g_free(bt->scheme_name); bt->scheme_name = scheme; }
+
+    GError *err = NULL;
+    gint pos = g_key_file_get_integer(kf, BT_CONFIG_GROUP, "paned_pos", &err);
+    if (!err && pos > 0) bt->paned_pos = pos;
+    g_clear_error(&err);
 
     /* Load fg/bg */
     gchar *s;
@@ -367,6 +373,9 @@ bt_save_settings(BottomTermPlugin *bt)
     GKeyFile *kf = g_key_file_new();
     g_key_file_set_string(kf, BT_CONFIG_GROUP, "font", bt->font);
     g_key_file_set_string(kf, BT_CONFIG_GROUP, "scheme", bt->scheme_name);
+
+    if (bt->paned_pos > 0)
+        g_key_file_set_integer(kf, BT_CONFIG_GROUP, "paned_pos", bt->paned_pos);
 
     gchar *s;
     s = rgba_to_string(&bt->fg);
@@ -750,8 +759,11 @@ bt_cleanup(GeanyPlugin *plugin, gpointer pdata)
     if (bt_plugin->run_menu_item && GTK_IS_WIDGET(bt_plugin->run_menu_item))
         gtk_widget_destroy(bt_plugin->run_menu_item);
 
-    /* Restore original widget hierarchy */
+    /* Restore original widget hierarchy (also captures paned position) */
     reparent_restore(bt_plugin);
+
+    /* Save settings (persists paned position) */
+    bt_save_settings(bt_plugin);
 
     g_free(bt_plugin->font);
     g_free(bt_plugin->scheme_name);

@@ -27,6 +27,7 @@ typedef struct {
     gchar       *font;          /* Pango font string, e.g. "Monospace 10" */
     gchar       *config_file;   /* path to settings ini */
     gchar       *scheme_name;   /* name of preset (or "Custom") */
+    gint         paned_pos;     /* saved paned split position (-1 = auto) */
     GdkRGBA      fg;
     GdkRGBA      bg;
     GdkRGBA      palette[BT_PALETTE_SIZE];

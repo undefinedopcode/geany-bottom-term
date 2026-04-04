@@ -38,13 +38,17 @@ reparent_inject_paned(BottomTermPlugin *bt)
 
     g_object_unref(notebook);
 
-    /* Set initial split: 70% document, 30% terminal */
-    GtkAllocation alloc;
-    gtk_widget_get_allocation(bt->original_parent, &alloc);
-    if (alloc.height > 100)
-        gtk_paned_set_position(GTK_PANED(bt->paned), alloc.height * 7 / 10);
-    else
-        gtk_paned_set_position(GTK_PANED(bt->paned), 400);
+    /* Restore saved split position, or default to 70% document / 30% terminal */
+    if (bt->paned_pos > 0) {
+        gtk_paned_set_position(GTK_PANED(bt->paned), bt->paned_pos);
+    } else {
+        GtkAllocation alloc;
+        gtk_widget_get_allocation(bt->original_parent, &alloc);
+        if (alloc.height > 100)
+            gtk_paned_set_position(GTK_PANED(bt->paned), alloc.height * 7 / 10);
+        else
+            gtk_paned_set_position(GTK_PANED(bt->paned), 400);
+    }
 
     gtk_widget_show_all(bt->paned);
 }
@@ -69,6 +73,9 @@ reparent_restore(BottomTermPlugin *bt)
      * 5. Remove our paned from the original parent
      * 6. Re-add Geany's notebook to its original parent
      */
+
+    /* Save the current paned position before tearing down */
+    bt->paned_pos = gtk_paned_get_position(GTK_PANED(bt->paned));
 
     bt->shutting_down = TRUE;
 
