@@ -1,6 +1,7 @@
 #include "tab_manager.h"
 #include "plugin.h"
 #include "terminal.h"
+#include "tmux.h"
 
 static gint tab_counter = 0;
 
@@ -224,8 +225,40 @@ tab_manager_add_run_tab(GtkNotebook *notebook, const gchar *command,
 }
 
 void
+tab_manager_add_tmux_tab(GtkNotebook *notebook, GtkWidget *vte,
+                         const gchar *title)
+{
+    tab_counter++;
+
+    GtkWidget *label = tab_label_new(notebook, vte, tab_counter);
+
+    /* Prepend a tmux icon to distinguish from regular tabs */
+    GtkWidget *icon = gtk_image_new_from_icon_name("view-grid-symbolic",
+                                                    GTK_ICON_SIZE_MENU);
+    gtk_widget_set_margin_end(icon, 4);
+    gtk_box_pack_start(GTK_BOX(label), icon, FALSE, FALSE, 0);
+    gtk_box_reorder_child(GTK_BOX(label), icon, 0);
+    gtk_widget_show(icon);
+
+    gtk_notebook_append_page(notebook, vte, label);
+    gtk_notebook_set_tab_reorderable(notebook, vte, TRUE);
+    gtk_widget_show_all(vte);
+
+    tab_manager_set_tab_title(notebook, vte, title);
+
+    gint page_num = gtk_notebook_page_num(notebook, vte);
+    gtk_notebook_set_current_page(notebook, page_num);
+    gtk_widget_grab_focus(vte);
+}
+
+void
 tab_manager_close_tab(GtkNotebook *notebook, gint page_num)
 {
+    /* Notify tmux if this is a tmux tab */
+    GtkWidget *page = gtk_notebook_get_nth_page(notebook, page_num);
+    if (page && bt_tmux_is_tmux_tab(page))
+        bt_tmux_on_tab_closed(page);
+
     gtk_notebook_remove_page(notebook, page_num);
 
     /* Always keep at least one tab — but not during shutdown */
@@ -247,9 +280,17 @@ tab_manager_set_tab_title(GtkNotebook *notebook, GtkWidget *page,
     if (!tab_box || !GTK_IS_BOX(tab_box))
         return;
 
-    /* The first child in the tab label box is the GtkLabel */
+    /* Find the GtkLabel in the tab label box (may not be the first child
+     * if a tmux icon was prepended). */
     GList *children = gtk_container_get_children(GTK_CONTAINER(tab_box));
-    if (children && GTK_IS_LABEL(children->data)) {
+    GtkWidget *label_widget = NULL;
+    for (GList *l = children; l; l = l->next) {
+        if (GTK_IS_LABEL(l->data)) {
+            label_widget = l->data;
+            break;
+        }
+    }
+    if (label_widget) {
         /* Truncate long titles */
         gchar *short_title;
         if (g_utf8_strlen(title, -1) > 20) {
@@ -260,7 +301,7 @@ tab_manager_set_tab_title(GtkNotebook *notebook, GtkWidget *page,
             short_title = g_strdup(title);
         }
 
-        gtk_label_set_text(GTK_LABEL(children->data), short_title);
+        gtk_label_set_text(GTK_LABEL(label_widget), short_title);
         /* Set full title as tooltip on the tab label box */
         gtk_widget_set_tooltip_text(tab_box, title);
         g_free(short_title);

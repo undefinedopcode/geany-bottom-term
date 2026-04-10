@@ -14,6 +14,7 @@ plugin_sources = files(
   'src/tab_manager.c',
   'src/reparent.c',
   'src/colors.c',
+  'src/tmux.c',
 )
 
 shared_library('geany-bottom-term',

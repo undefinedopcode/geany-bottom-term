@@ -5,6 +5,8 @@
 #include <vte/vte.h>
 #include "colors.h"
 
+typedef struct _BtTmuxSession BtTmuxSession;
+
 typedef struct {
     GeanyPlugin *geany_plugin;
 
@@ -19,6 +21,9 @@ typedef struct {
     /* Menu */
     GtkWidget   *menu_item;
     GtkWidget   *run_menu_item;
+    GtkWidget   *tmux_attach_item;
+    GtkWidget   *tmux_detach_item;
+    GtkWidget   *tmux_new_win_item;
 
     /* Lifecycle */
     gboolean     shutting_down; /* TRUE during cleanup — suppresses child-exited actions */

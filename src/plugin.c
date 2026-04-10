@@ -3,6 +3,7 @@
 #include "tab_manager.h"
 #include "terminal.h"
 #include "reparent.h"
+#include "tmux.h"
 #include <build.h>
 
 #define BT_CONFIG_GROUP "bottom-terminal"
@@ -15,6 +16,8 @@ GeanyData   *geany_data;
 BottomTermPlugin *bt_plugin = NULL;
 
 static void bt_run_execute_command(void);
+static void bt_tmux_show_session_dialog(void);
+static void bt_tmux_update_menu_sensitivity(void);
 
 /* --- Keybinding IDs --- */
 
@@ -26,6 +29,9 @@ enum {
     KB_PREV_TAB,
     KB_TOGGLE_TERMINAL,
     KB_RUN_IN_TERMINAL,
+    KB_TMUX_ATTACH,
+    KB_TMUX_DETACH,
+    KB_TMUX_NEW_WINDOW,
     KB_COUNT
 };
 
@@ -81,6 +87,26 @@ on_keybinding(guint key_id)
     case KB_RUN_IN_TERMINAL:
         bt_run_execute_command();
         break;
+
+    case KB_TMUX_ATTACH:
+        bt_tmux_show_session_dialog();
+        break;
+
+    case KB_TMUX_DETACH: {
+        BtTmuxSession *s = bt_tmux_get_session();
+        if (s) {
+            bt_tmux_detach(s);
+            bt_tmux_update_menu_sensitivity();
+        }
+        break;
+    }
+
+    case KB_TMUX_NEW_WINDOW: {
+        BtTmuxSession *s = bt_tmux_get_session();
+        if (s)
+            bt_tmux_new_window(s);
+        break;
+    }
     }
 
     return TRUE;
@@ -231,6 +257,121 @@ on_menu_run(GtkMenuItem *item, gpointer user_data)
     bt_run_execute_command();
 }
 
+/* --- tmux session picker dialog --- */
+
+static void
+bt_tmux_show_session_dialog(void)
+{
+    gchar **sessions = bt_tmux_list_sessions();
+
+    GtkWidget *dlg = gtk_dialog_new_with_buttons(
+        "tmux Session",
+        GTK_WINDOW(geany_data->main_widgets->window),
+        GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
+        "_Cancel", GTK_RESPONSE_CANCEL,
+        "_OK", GTK_RESPONSE_OK,
+        NULL);
+
+    GtkWidget *content = gtk_dialog_get_content_area(GTK_DIALOG(dlg));
+    gtk_container_set_border_width(GTK_CONTAINER(content), 12);
+    gtk_box_set_spacing(GTK_BOX(content), 8);
+
+    /* Existing sessions combo */
+    GtkWidget *attach_hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    gtk_box_pack_start(GTK_BOX(attach_hbox),
+        gtk_label_new("Existing:"), FALSE, FALSE, 0);
+    GtkWidget *combo = gtk_combo_box_text_new();
+    if (sessions) {
+        for (gint i = 0; sessions[i]; i++)
+            gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(combo),
+                                           sessions[i]);
+        gtk_combo_box_set_active(GTK_COMBO_BOX(combo), 0);
+    }
+    gtk_box_pack_start(GTK_BOX(attach_hbox), combo, TRUE, TRUE, 0);
+    gtk_box_pack_start(GTK_BOX(content), attach_hbox, FALSE, FALSE, 0);
+
+    /* New session entry */
+    GtkWidget *new_hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    gtk_box_pack_start(GTK_BOX(new_hbox),
+        gtk_label_new("Or create:"), FALSE, FALSE, 0);
+    GtkWidget *entry = gtk_entry_new();
+    gtk_entry_set_placeholder_text(GTK_ENTRY(entry), "new session name");
+    gtk_box_pack_start(GTK_BOX(new_hbox), entry, TRUE, TRUE, 0);
+    gtk_box_pack_start(GTK_BOX(content), new_hbox, FALSE, FALSE, 0);
+
+    gtk_widget_show_all(content);
+
+    gint resp = gtk_dialog_run(GTK_DIALOG(dlg));
+    if (resp == GTK_RESPONSE_OK) {
+        const gchar *new_name = gtk_entry_get_text(GTK_ENTRY(entry));
+        if (new_name && new_name[0]) {
+            /* Create new session */
+            if (!bt_tmux_new_session(new_name))
+                ui_set_statusbar(TRUE, "Failed to create tmux session '%s'",
+                                 new_name);
+        } else {
+            /* Attach to selected existing session */
+            gchar *sel = gtk_combo_box_text_get_active_text(
+                GTK_COMBO_BOX_TEXT(combo));
+            if (sel && sel[0]) {
+                if (!bt_tmux_attach(sel))
+                    ui_set_statusbar(TRUE,
+                        "Failed to attach to tmux session '%s'", sel);
+            }
+            g_free(sel);
+        }
+    }
+
+    gtk_widget_destroy(dlg);
+    g_strfreev(sessions);
+    bt_tmux_update_menu_sensitivity();
+}
+
+static void
+on_tmux_attach(GtkMenuItem *item, gpointer user_data)
+{
+    (void)item;
+    (void)user_data;
+    bt_tmux_show_session_dialog();
+}
+
+static void
+on_tmux_detach(GtkMenuItem *item, gpointer user_data)
+{
+    (void)item;
+    (void)user_data;
+    BtTmuxSession *s = bt_tmux_get_session();
+    if (s) {
+        bt_tmux_detach(s);
+        ui_set_statusbar(FALSE, "Detached from tmux session");
+    }
+    bt_tmux_update_menu_sensitivity();
+}
+
+static void
+on_tmux_new_window(GtkMenuItem *item, gpointer user_data)
+{
+    (void)item;
+    (void)user_data;
+    BtTmuxSession *s = bt_tmux_get_session();
+    if (s)
+        bt_tmux_new_window(s);
+}
+
+static void
+bt_tmux_update_menu_sensitivity(void)
+{
+    if (!bt_plugin)
+        return;
+    gboolean attached = bt_tmux_get_session() != NULL;
+    if (bt_plugin->tmux_attach_item)
+        gtk_widget_set_sensitive(bt_plugin->tmux_attach_item, !attached);
+    if (bt_plugin->tmux_detach_item)
+        gtk_widget_set_sensitive(bt_plugin->tmux_detach_item, attached);
+    if (bt_plugin->tmux_new_win_item)
+        gtk_widget_set_sensitive(bt_plugin->tmux_new_win_item, attached);
+}
+
 /* --- Key intercept via Geany's plugin "key-press" signal ---
  *
  * Geany's on_key_press_event (keybindings.c) does this:
@@ -279,9 +420,20 @@ on_geany_key_press(GObject *obj, GdkEventKey *event, gpointer user_data)
             return TRUE;
         }
         if (is_paste) {
-            vte_terminal_paste_clipboard(term);
+            /* For tmux tabs, send clipboard content through tmux */
+            if (bt_tmux_is_tmux_tab(focused)) {
+                bt_tmux_paste(bt_tmux_get_session(), focused);
+            } else {
+                vte_terminal_paste_clipboard(term);
+            }
             return TRUE;
         }
+    }
+
+    /* For tmux tabs: forward keypress through tmux control mode */
+    if (bt_tmux_is_tmux_tab(focused)) {
+        bt_tmux_send_keys(bt_tmux_get_session(), focused, event);
+        return TRUE;
     }
 
     /* For all other keys: feed the event directly to VTE, then return
@@ -718,6 +870,12 @@ bt_init(GeanyPlugin *plugin, gpointer pdata)
         NULL, 0, 0, "bt_toggle", "Toggle terminal visibility", NULL);
     keybindings_set_item(group, KB_RUN_IN_TERMINAL,
         NULL, 0, 0, "bt_run", "Run in terminal", NULL);
+    keybindings_set_item(group, KB_TMUX_ATTACH,
+        NULL, 0, 0, "bt_tmux_attach", "Attach tmux session", NULL);
+    keybindings_set_item(group, KB_TMUX_DETACH,
+        NULL, 0, 0, "bt_tmux_detach", "Detach tmux session", NULL);
+    keybindings_set_item(group, KB_TMUX_NEW_WINDOW,
+        NULL, 0, 0, "bt_tmux_new_win", "New tmux window", NULL);
 
     /* Add menu items under Tools */
     bt_plugin->menu_item = gtk_menu_item_new_with_mnemonic("Toggle _Bottom Terminal");
@@ -732,6 +890,40 @@ bt_init(GeanyPlugin *plugin, gpointer pdata)
     gtk_widget_show(run_item);
     gtk_container_add(GTK_CONTAINER(geany_data->main_widgets->tools_menu), run_item);
     bt_plugin->run_menu_item = run_item;
+
+    /* Conditionally add tmux menu items */
+    if (bt_tmux_available()) {
+        /* Separator */
+        GtkWidget *sep = gtk_separator_menu_item_new();
+        gtk_widget_show(sep);
+        gtk_container_add(GTK_CONTAINER(geany_data->main_widgets->tools_menu), sep);
+
+        bt_plugin->tmux_attach_item =
+            gtk_menu_item_new_with_mnemonic("Attach _tmux Session...");
+        g_signal_connect(bt_plugin->tmux_attach_item, "activate",
+                         G_CALLBACK(on_tmux_attach), NULL);
+        gtk_widget_show(bt_plugin->tmux_attach_item);
+        gtk_container_add(GTK_CONTAINER(geany_data->main_widgets->tools_menu),
+                          bt_plugin->tmux_attach_item);
+
+        bt_plugin->tmux_detach_item =
+            gtk_menu_item_new_with_mnemonic("_Detach tmux Session");
+        g_signal_connect(bt_plugin->tmux_detach_item, "activate",
+                         G_CALLBACK(on_tmux_detach), NULL);
+        gtk_widget_show(bt_plugin->tmux_detach_item);
+        gtk_container_add(GTK_CONTAINER(geany_data->main_widgets->tools_menu),
+                          bt_plugin->tmux_detach_item);
+
+        bt_plugin->tmux_new_win_item =
+            gtk_menu_item_new_with_mnemonic("New tmux _Window");
+        g_signal_connect(bt_plugin->tmux_new_win_item, "activate",
+                         G_CALLBACK(on_tmux_new_window), NULL);
+        gtk_widget_show(bt_plugin->tmux_new_win_item);
+        gtk_container_add(GTK_CONTAINER(geany_data->main_widgets->tools_menu),
+                          bt_plugin->tmux_new_win_item);
+
+        bt_tmux_update_menu_sensitivity();
+    }
 
     /* Hook Geany's plugin "key-press" signal — this fires inside Geany's
      * on_key_press_event, BEFORE keybinding processing. Returning TRUE
@@ -753,11 +945,20 @@ bt_cleanup(GeanyPlugin *plugin, gpointer pdata)
 
     /* plugin_signal_connect auto-disconnects on cleanup, no manual disconnect needed */
 
+    /* Detach tmux cleanly before tearing down UI */
+    bt_tmux_shutdown();
+
     /* Remove menu items */
     if (bt_plugin->menu_item && GTK_IS_WIDGET(bt_plugin->menu_item))
         gtk_widget_destroy(bt_plugin->menu_item);
     if (bt_plugin->run_menu_item && GTK_IS_WIDGET(bt_plugin->run_menu_item))
         gtk_widget_destroy(bt_plugin->run_menu_item);
+    if (bt_plugin->tmux_attach_item && GTK_IS_WIDGET(bt_plugin->tmux_attach_item))
+        gtk_widget_destroy(bt_plugin->tmux_attach_item);
+    if (bt_plugin->tmux_detach_item && GTK_IS_WIDGET(bt_plugin->tmux_detach_item))
+        gtk_widget_destroy(bt_plugin->tmux_detach_item);
+    if (bt_plugin->tmux_new_win_item && GTK_IS_WIDGET(bt_plugin->tmux_new_win_item))
+        gtk_widget_destroy(bt_plugin->tmux_new_win_item);
 
     /* Restore original widget hierarchy (also captures paned position) */
     reparent_restore(bt_plugin);
